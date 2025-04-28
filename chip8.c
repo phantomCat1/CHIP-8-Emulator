@@ -15,11 +15,12 @@ typedef struct {
 } sdl_t;
 
 typedef struct {
-    uint32_t scale_factor;
-    uint32_t window_width;
-    uint32_t window_height;
-    uint32_t foreground_color;
-    uint32_t background_color;
+    uint32_t scale_factor;          // Amount to scale the 64x32 display of CHIP8 
+    uint32_t window_width;          // width of the SDL window
+    uint32_t window_height;         // height of the SDL window
+    uint32_t foreground_color;      // foreground color of sprites
+    uint32_t background_color;      // background color of window
+    uint32_t instr_rate;            // number of instructions per second to be run 
 } config_t;
 
 typedef enum {
@@ -46,11 +47,12 @@ typedef struct {
 
 bool set_config(config_t* config, chip8_t* chip8, const int argc, char **argv){
     *config = (config_t){
-        .scale_factor = 20,
-        .window_width = 64,
-        .window_height = 32,
-        .foreground_color = 0xFFFFFFFF,
-        .background_color = 0x00000000,
+        .scale_factor = 20,                 // value to scale the display of CHIP8 by
+        .window_width = 64,                 // width of SDL window
+        .window_height = 32,                // height of SDL window
+        .foreground_color = 0xFFFFFFFF,     // white
+        .background_color = 0x00000000,     // black 
+        .instr_rate = 700,                 // Number of instructions to run in 1 second
     };
     if(argc > 1) {
         for (int i=0; i < argc; i++){
@@ -222,25 +224,64 @@ void update_screen(sdl_t* sdl, const config_t config, const chip8_t* chip8){
     SDL_RenderPresent(sdl->renderer);
 }
 
-void handle_input(emulator_state_t* state){
+void handle_input(chip8_t* chip8){
     SDL_Event event;
     while(SDL_PollEvent(&event)){
         switch(event.type){
-            case SDL_QUIT: *state = QUIT; return;
+            case SDL_QUIT: chip8->state = QUIT; break;
             case SDL_KEYDOWN: 
                 switch(event.key.keysym.sym){
-                    case SDLK_ESCAPE: *state = QUIT; return;
+                    case SDLK_ESCAPE: chip8->state = QUIT; break;
                     case SDLK_SPACE: 
-                        if(*state == PAUSED) {
-                            *state = RUNNING;
-                        } else if(*state == RUNNING) {
-                            *state = PAUSED;
+                        if(chip8->state == PAUSED) {
+                            chip8->state = RUNNING;
+                        } else if(chip8->state == RUNNING) {
+                            chip8->state = PAUSED;
                             puts("==Paused==");
                         } else {
                             perror("Somehow state QUIT was reached\n");
                             exit(EXIT_FAILURE);
-                        } return;
-                }
+                        } break;
+                    case SDLK_0: chip8->keypad[0x00] = true; break;
+                    case SDLK_1: chip8->keypad[0x01] = true; break;
+                    case SDLK_2: chip8->keypad[0x02] = true; break;
+                    case SDLK_3: chip8->keypad[0x03] = true; break;
+                    case SDLK_4: chip8->keypad[0x04] = true; break;
+                    case SDLK_5: chip8->keypad[0x05] = true; break;
+                    case SDLK_6: chip8->keypad[0x06] = true; break;
+                    case SDLK_7: chip8->keypad[0x07] = true; break;
+                    case SDLK_8: chip8->keypad[0x08] = true; break;
+                    case SDLK_9: chip8->keypad[0x09] = true; break;
+                    case SDLK_a: chip8->keypad[0x0A] = true; break;
+                    case SDLK_b: chip8->keypad[0x0B] = true; break;
+                    case SDLK_c: chip8->keypad[0x0C] = true; break;
+                    case SDLK_d: chip8->keypad[0x0D] = true; break;
+                    case SDLK_e: chip8->keypad[0x0E] = true; break;
+                    case SDLK_f: chip8->keypad[0x0F] = true; break;
+                    default: break;
+                } break;
+            case SDL_KEYUP:
+                switch(event.key.keysym.sym){
+                    case SDLK_0: chip8->keypad[0x00] = false; break;
+                    case SDLK_1: chip8->keypad[0x01] = false; break;
+                    case SDLK_2: chip8->keypad[0x02] = false; break;
+                    case SDLK_3: chip8->keypad[0x03] = false; break;
+                    case SDLK_4: chip8->keypad[0x04] = false; break;
+                    case SDLK_5: chip8->keypad[0x05] = false; break;
+                    case SDLK_6: chip8->keypad[0x06] = false; break;
+                    case SDLK_7: chip8->keypad[0x07] = false; break;
+                    case SDLK_8: chip8->keypad[0x08] = false; break;
+                    case SDLK_9: chip8->keypad[0x09] = false; break;
+                    case SDLK_a: chip8->keypad[0x0A] = false; break;
+                    case SDLK_b: chip8->keypad[0x0B] = false; break;
+                    case SDLK_c: chip8->keypad[0x0C] = false; break;
+                    case SDLK_d: chip8->keypad[0x0D] = false; break;
+                    case SDLK_e: chip8->keypad[0x0E] = false; break;
+                    case SDLK_f: chip8->keypad[0x0F] = false; break;
+                    default: break;
+                } break;
+            default: break;
+                
         }
     }
 }
@@ -260,7 +301,6 @@ void emulate_instruction(chip8_t* chip8, config_t config){
     uint16_t X = (instr & 0x0F00) >> 8;
     uint16_t Y = (instr & 0x00F0) >> 4;
     uint16_t N = (instr & 0x000F);
-    printf("Executing %04X\n", instr);
     switch(first4bits) {
         case 0x00: 
             if (NN == 0xE0) {
@@ -493,6 +533,17 @@ void emulate_instruction(chip8_t* chip8, config_t config){
     }
 }
 
+void update_timers(chip8_t* chip8){
+    if(chip8->delay_timer > 0){
+        chip8->delay_timer--;
+    }
+    if(chip8->sound_timer > 0) {
+        chip8->sound_timer--;
+    } else {
+        
+    }
+}
+
 int main(int argc, char **argv){
     sdl_t sdl= {0};
     config_t config = {0};
@@ -514,14 +565,28 @@ int main(int argc, char **argv){
     
     clear_screen(config, &sdl);
     while(chip8.state != QUIT){
-        handle_input(&chip8.state);
+        // handle any input the user might have done first
+        handle_input(&chip8);
+        // if paused, then simply halt all execution
         if(chip8.state == PAUSED) continue;
-
-        emulate_instruction(&chip8, config);
-
-        SDL_Delay(16);
+        // get the time before running the instructions
+        uint64_t before_frame = SDL_GetPerformanceCounter();
+        // execute config.instr_rate instructions per second
+        for(uint32_t i=0; i < config.instr_rate / 60; i++){
+            emulate_instruction(&chip8, config);
+        }
+        // get the time after running the instructions
+        uint64_t after_frame = SDL_GetPerformanceCounter();
+        // delay for 60Hz or actual elapsed time
+        const double time_elapsed = (double)((after_frame - before_frame) * 1000) / SDL_GetPerformanceFrequency();
+        // delay the display
+        SDL_Delay(16.67f > time_elapsed ? 16.67f - time_elapsed: 0);
+        // update the display
         update_screen(&sdl, config, &chip8);
+        // update the delay and sound timers
+        update_timers(&chip8);
     }
+    // properly close all SDL initalizers and end the program
     finish_sdl(&sdl);
 
     return 0;
