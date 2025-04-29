@@ -11,7 +11,8 @@
 typedef struct {
     SDL_Window* window;
     SDL_Renderer* renderer;
-
+    SDL_AudioDeviceID deviceID;
+    SDL_AudioSpec want, have;
 } sdl_t;
 
 typedef struct {
@@ -21,6 +22,9 @@ typedef struct {
     uint32_t foreground_color;      // foreground color of sprites
     uint32_t background_color;      // background color of window
     uint32_t instr_rate;            // number of instructions per second to be run 
+    uint32_t square_wave_freq;       // Frequency of square wave sound 
+    uint16_t volume;                // volume of audio
+    uint32_t audio_sample_rate;
 } config_t;
 
 typedef enum {
@@ -53,6 +57,9 @@ bool set_config(config_t* config, chip8_t* chip8, const int argc, char **argv){
         .foreground_color = 0xFFFFFFFF,     // white
         .background_color = 0x00000000,     // black 
         .instr_rate = 700,                 // Number of instructions to run in 1 second
+        .square_wave_freq = 440,             // 440Hz
+        .audio_sample_rate = 44100,
+        .volume = 3000,                     // INT16_MAX would be max volume 
     };
     if(argc > 1) {
         for (int i=0; i < argc; i++){
@@ -111,7 +118,7 @@ bool set_config(config_t* config, chip8_t* chip8, const int argc, char **argv){
     return true;
 }
 
-bool init_chip8(chip8_t *chip8){
+bool init_chip8(chip8_t *chip8, char rom_path[]){
     const uint8_t font[] = {
         0xF0, 0x90, 0x90, 0x90, 0xF0,   // 0   
         0x20, 0x60, 0x20, 0x20, 0x70,   // 1  
@@ -130,10 +137,10 @@ bool init_chip8(chip8_t *chip8){
         0xF0, 0x80, 0xF0, 0x80, 0xF0,   // E
         0xF0, 0x80, 0xF0, 0x80, 0x80,   // F
     };
-    //memset(chip8, 0, sizeof(chip8_t));
+    memset(chip8, 0, sizeof(chip8_t));
     memcpy(&(chip8->RAM[0]), font, sizeof(font));
 
-    FILE *rom = fopen(chip8->rom_path, "rb");
+    FILE *rom = fopen(rom_path, "rb");
     if(rom==NULL){
         perror("Failed to read the specified ROM file");
         return false;
@@ -152,35 +159,68 @@ bool init_chip8(chip8_t *chip8){
         return false;
     }
     fclose(rom);
+    chip8->rom_path = rom_path;
     chip8->state = RUNNING;
     chip8->PC = 0x200;
     chip8->SP = 0;
     return true;
 }
 
-bool init_sdl(sdl_t* sdl, const config_t config){
+void audio_callback(void *userdata, uint8_t *stream, int len){
+    config_t *config = (config_t*) userdata;
+    int16_t *audio_data = (int16_t*)stream;
+    static uint32_t running_sample_index = 0;
+    const int32_t square_wave_period = config->audio_sample_rate / config->square_wave_freq;
+    const int32_t half_square_wave_period = square_wave_period /2;
+
+    for(int i=0; i<len/2; i++){
+        audio_data[i] = ((running_sample_index++ / half_square_wave_period) % 2) ? config->volume: -config->volume;
+
+    }
+
+}
+
+bool init_sdl(sdl_t* sdl, config_t* config){
     if(SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO | SDL_INIT_TIMER)!= 0){
         SDL_Log("Could not initialize SDL subsytem: %s\n", SDL_GetError());
         return false;
     } 
-    printf("bruh\n");
-    sdl->window = SDL_CreateWindow("CHIP8-Emulator", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, config.window_width * config.scale_factor, config.window_height * config.scale_factor, 0);
+    sdl->window = SDL_CreateWindow("CHIP8-Emulator", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, config->window_width * config->scale_factor, config->window_height * config->scale_factor, 0);
     if(sdl->window == NULL){
         SDL_Log("Could not create window: %s\n", SDL_GetError());
         return false;
     }
-    printf("2\n");
     if((sdl->renderer = SDL_CreateRenderer(sdl->window, -1, SDL_RENDERER_ACCELERATED))== NULL){
         SDL_Log("Could not create renderer: %s\n", SDL_GetError());
         return false;
     }
-    printf("3\n");
+
+    sdl->want = (SDL_AudioSpec) {
+        .freq = 44100,              // 44100 HZ frquency
+        .format = AUDIO_S16LSB,     // Signed 16 bit little endian
+        .channels = 1,              // 1 channel for reading/ loading audio
+        .samples = 512,            
+        .callback = audio_callback, // callback function for audio
+        .userdata = config,        // userdata passed to audio callback
+    };
+
+    sdl->deviceID = SDL_OpenAudioDevice(NULL, 0, &sdl->want, &sdl->have, 0);
+    if (sdl->deviceID == 0) {
+        SDL_Log("Could not get an audio device\n");
+        return false;
+    } 
+
+    if (sdl->want.channels != sdl->have.channels || sdl->want.format != sdl->have.format){
+        SDL_Log("Could not get desired audio spec\n");
+        return false;
+    }
     return true;
 }
 
 void finish_sdl(sdl_t* sdl){
     SDL_DestroyRenderer(sdl->renderer);
     SDL_DestroyWindow(sdl->window);
+    SDL_CloseAudioDevice(sdl->deviceID);
     atexit(SDL_Quit);
 }
 
@@ -224,7 +264,7 @@ void update_screen(sdl_t* sdl, const config_t config, const chip8_t* chip8){
     SDL_RenderPresent(sdl->renderer);
 }
 
-void handle_input(chip8_t* chip8){
+void handle_input(chip8_t* chip8, config_t* config){
     SDL_Event event;
     while(SDL_PollEvent(&event)){
         switch(event.type){
@@ -258,6 +298,9 @@ void handle_input(chip8_t* chip8){
                     case SDLK_d: chip8->keypad[0x0D] = true; break;
                     case SDLK_e: chip8->keypad[0x0E] = true; break;
                     case SDLK_f: chip8->keypad[0x0F] = true; break;
+                    case SDLK_o: if(config->volume >0) config->volume-=500; break;
+                    case SDLK_p: if(config->volume < INT16_MAX) config->volume+=500; break;
+                    case SDLK_EQUALS: init_chip8(chip8, chip8->rom_path); break;
                     default: break;
                 } break;
             case SDL_KEYUP:
@@ -533,14 +576,15 @@ void emulate_instruction(chip8_t* chip8, config_t config){
     }
 }
 
-void update_timers(chip8_t* chip8){
+void update_timers(chip8_t* chip8, sdl_t* sdl){
     if(chip8->delay_timer > 0){
         chip8->delay_timer--;
     }
     if(chip8->sound_timer > 0) {
         chip8->sound_timer--;
+        SDL_PauseAudioDevice(sdl->deviceID, 0);
     } else {
-        
+        SDL_PauseAudioDevice(sdl->deviceID, 1);
     }
 }
 
@@ -554,19 +598,20 @@ int main(int argc, char **argv){
         exit(EXIT_FAILURE);
     }
 
-    if(!init_chip8(&chip8)){
+    char* rom_path = chip8.rom_path;
+    if(!init_chip8(&chip8, rom_path)){
         exit(EXIT_FAILURE);
     }
     
     // Initialize SDL subsystem 
-    if(!init_sdl(&sdl, config)){
+    if(!init_sdl(&sdl, &config)){
         exit(EXIT_FAILURE);
     }
     
     clear_screen(config, &sdl);
     while(chip8.state != QUIT){
         // handle any input the user might have done first
-        handle_input(&chip8);
+        handle_input(&chip8, &config);
         // if paused, then simply halt all execution
         if(chip8.state == PAUSED) continue;
         // get the time before running the instructions
@@ -584,7 +629,7 @@ int main(int argc, char **argv){
         // update the display
         update_screen(&sdl, config, &chip8);
         // update the delay and sound timers
-        update_timers(&chip8);
+        update_timers(&chip8, &sdl);
     }
     // properly close all SDL initalizers and end the program
     finish_sdl(&sdl);
